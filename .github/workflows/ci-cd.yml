@@ -1,0 +1,117 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  IMAGE_NAME: student-management
+
+jobs:
+  test:
+    name: Lint and Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Lint with flake8
+        run: python -m flake8
+
+      - name: Run tests with coverage
+        run: python -m pytest --cov=app --cov-report=term-missing --cov-report=xml
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage.xml
+
+  build:
+    name: Build and Smoke Test Image
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: docker build -t $IMAGE_NAME:ci .
+
+      - name: Run container and check health
+        run: |
+          docker run -d --name sms -p 5000:5000 $IMAGE_NAME:ci
+          for i in $(seq 1 15); do
+            if curl -fs http://localhost:5000/health; then
+              echo "App is healthy"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "App failed health check"
+          docker logs sms
+          exit 1
+
+  publish:
+    name: Push Image to Docker Hub
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ secrets.DOCKERHUB_USERNAME }}/student-management:latest
+            ${{ secrets.DOCKERHUB_USERNAME }}/student-management:${{ github.sha }}
+              deploy:
+    name: Deploy to Local Docker
+    runs-on: self-hosted
+    needs: publish
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - name: Deploy container
+        shell: powershell
+        run: |
+          $image = "${{ secrets.DOCKERHUB_USERNAME }}/student-management:${{ github.sha }}"
+          docker pull $image
+          docker stop sms 2>$null
+          docker rm sms 2>$null
+          docker run -d --name sms --restart unless-stopped -p 5000:5000 -v sms-data:/data $image
+
+      - name: Verify health
+        shell: powershell
+        run: |
+          for ($i = 0; $i -lt 15; $i++) {
+            try {
+              $r = Invoke-WebRequest -UseBasicParsing http://localhost:5000/health
+              if ($r.StatusCode -eq 200) { Write-Host "Deployment healthy"; exit 0 }
+            } catch { Start-Sleep -Seconds 2 }
+          }
+          docker logs sms
+          exit 1
