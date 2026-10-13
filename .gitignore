@@ -1,6 +1,12 @@
 venv/
+.git/
+.github/
 __pycache__/
 *.pyc
+instance/
 *.db
 .env
-instance/
+tests/
+.pytest_cache/
+.coverage
+requirements-dev.txt
