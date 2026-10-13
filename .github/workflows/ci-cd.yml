@@ -89,7 +89,8 @@ jobs:
           tags: |
             ${{ secrets.DOCKERHUB_USERNAME }}/student-management:latest
             ${{ secrets.DOCKERHUB_USERNAME }}/student-management:${{ github.sha }}
-              deploy:
+
+  deploy:
     name: Deploy to Local Docker
     runs-on: self-hosted
     needs: publish
